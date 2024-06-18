@@ -72,7 +72,7 @@ impl StateTrie {
 
         let mut storage_trie = self.get_storage_trie(proof.storage_hash);
         for proof in proof.storage_proof {
-            let mut proof_big_endian = Vec::new();
+            let mut proof_big_endian = vec![0u8; 32];
             proof.key.to_big_endian(&mut proof_big_endian);
 
             storage_trie.load_proof(

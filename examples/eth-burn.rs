@@ -1,3 +1,4 @@
+use dotenvy::dotenv;
 use ethers::{
     providers::{Middleware, Provider},
     types::{Address, BlockId, BlockNumber, H256, U256},
@@ -9,7 +10,9 @@ async fn main() {
     // gm, u know how the ethereum's state root would look like if all ETH on zero address is burnt?!
     //
     // if this api key doesn't work pls use your own
-    let rpc_url = "https://eth-mainnet.g.alchemy.com/v2/bXp-Zt6_5bRUBJd7hSvPN3As6FTtUF4d";
+    dotenv().ok();
+    let api_key = std::env::var("ALCHEMY_API_KEY").unwrap();
+    let rpc_url = format!("https://eth-mainnet.g.alchemy.com/v2/{}", api_key);
     let provider = Provider::try_from(rpc_url).unwrap();
     let latest = BlockId::Number(BlockNumber::Latest);
     let latest_block = provider.get_block(latest).await.unwrap().unwrap();

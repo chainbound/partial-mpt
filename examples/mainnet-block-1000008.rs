@@ -1,3 +1,4 @@
+use dotenvy::dotenv;
 use ethers::{
     providers::{Middleware, Provider},
     types::{Address, BlockId, BlockNumber, H256},
@@ -6,7 +7,9 @@ use partial_mpt::StateTrie;
 
 #[tokio::main]
 async fn main() {
-    let rpc_url = "https://cloudflare-eth.com";
+    dotenv().ok();
+    let api_key = std::env::var("ALCHEMY_API_KEY").unwrap();
+    let rpc_url = format!("https://eth-mainnet.g.alchemy.com/v2/{}", api_key);
     let provider = Provider::try_from(rpc_url).unwrap();
 
     let prev_block_number = Some(BlockId::Number(BlockNumber::from(1000007)));
