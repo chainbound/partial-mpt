@@ -6,7 +6,7 @@ use partial_mpt::StateTrie;
 
 #[tokio::main]
 async fn main() {
-    let rpc_url = "https://eth-mainnet.g.alchemy.com/v2/bXp-Zt6_5bRUBJd7hSvPN3As6FTtUF4d";
+    let rpc_url = "https://cloudflare-eth.com";
     let provider = Provider::try_from(rpc_url).unwrap();
 
     let prev_block_number = Some(BlockId::Number(BlockNumber::from(1000007)));

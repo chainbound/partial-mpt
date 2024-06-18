@@ -72,8 +72,11 @@ impl StateTrie {
 
         let mut storage_trie = self.get_storage_trie(proof.storage_hash);
         for proof in proof.storage_proof {
+            let mut proof_big_endian = Vec::new();
+            proof.key.to_big_endian(&mut proof_big_endian);
+
             storage_trie.load_proof(
-                U256::from_big_endian(proof.key.as_bytes()),
+                U256::from_big_endian(&proof_big_endian),
                 proof.value,
                 proof.proof,
             )?;
