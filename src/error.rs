@@ -1,13 +1,13 @@
-use ethers::core::utils::rlp;
+use rlp::DecoderError;
 
 #[derive(Debug)]
 pub enum Error {
-    RlpDecoderError(rlp::DecoderError),
+    RlpDecoderError(DecoderError),
     InternalError(&'static str),
 }
 
-impl From<rlp::DecoderError> for Error {
-    fn from(err: rlp::DecoderError) -> Self {
+impl From<DecoderError> for Error {
+    fn from(err: DecoderError) -> Self {
         Error::RlpDecoderError(err)
     }
 }

@@ -1,6 +1,9 @@
-use crate::Error;
-use ethers::types::{Address, EIP1186ProofResponse, H256, U256};
 use std::collections::HashMap;
+
+use alloy_primitives::{Address, B256, U256};
+use alloy_rpc_types::EIP1186AccountProofResponse;
+
+use crate::Error;
 
 mod account_trie;
 pub use account_trie::{AccountData, AccountTrie};
@@ -11,22 +14,22 @@ pub use storage_trie::StorageTrie;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StateTrie {
     pub account_trie: AccountTrie,
-    storage_tries: HashMap<H256, StorageTrie>,
+    storage_tries: HashMap<B256, StorageTrie>,
 }
 
 impl StateTrie {
-    pub fn from_root(root: H256) -> Self {
+    pub fn from_root(root: B256) -> Self {
         StateTrie {
             account_trie: AccountTrie::from_root(root),
             storage_tries: HashMap::default(),
         }
     }
 
-    pub fn root(&self) -> Option<H256> {
+    pub fn root(&self) -> Option<B256> {
         self.account_trie.root()
     }
 
-    pub fn get_storage_trie(&mut self, storage_root: H256) -> StorageTrie {
+    pub fn get_storage_trie(&mut self, storage_root: B256) -> StorageTrie {
         if !self.storage_tries.contains_key(&storage_root) {
             StorageTrie::from_root(storage_root)
         } else {
@@ -58,12 +61,12 @@ impl StateTrie {
         Ok(())
     }
 
-    pub fn load_proof(&mut self, proof: EIP1186ProofResponse) -> Result<(), Error> {
+    pub fn load_proof(&mut self, proof: EIP1186AccountProofResponse) -> Result<(), Error> {
         self.account_trie.load_proof(
             proof.address,
             AccountData {
                 balance: proof.balance,
-                nonce: U256::from(proof.nonce.as_u64()),
+                nonce: U256::from(proof.nonce),
                 code_hash: proof.code_hash,
                 storage_root: proof.storage_hash,
             },
@@ -72,14 +75,9 @@ impl StateTrie {
 
         let mut storage_trie = self.get_storage_trie(proof.storage_hash);
         for proof in proof.storage_proof {
-            let mut proof_big_endian = vec![0u8; 32];
-            proof.key.to_big_endian(&mut proof_big_endian);
-
-            storage_trie.load_proof(
-                U256::from_big_endian(&proof_big_endian),
-                proof.value,
-                proof.proof,
-            )?;
+            // NOTE: I hope it's big endian
+            let key = U256::from_be_bytes(proof.key.0.into());
+            storage_trie.load_proof(key, proof.value, proof.proof)?;
         }
         self.storage_tries.insert(proof.storage_hash, storage_trie);
 
@@ -92,11 +90,12 @@ mod tests {
     use std::env;
     use std::str::FromStr;
 
-    use super::{EIP1186ProofResponse, StateTrie, U256};
-    use ethers::core::utils::hex;
-    use ethers::providers::{Middleware, Provider};
-    use ethers::types::{Address, BigEndianHash, BlockId, BlockNumber, StorageProof, H256};
-    use ethers::utils::keccak256;
+    use super::*;
+    use alloy_eips::{BlockId, BlockNumberOrTag};
+    use alloy_primitives::{b256, hex, keccak256, Address, B256};
+    use alloy_provider::{Provider, ProviderBuilder};
+    use alloy_rpc_types::{BlockTransactionsKind, EIP1186StorageProof};
+    use alloy_transport_http::reqwest::Url;
 
     #[test]
     pub fn test_geth_dev_state_1() {
@@ -106,7 +105,7 @@ mod tests {
         let mut trie = StateTrie::default();
 
         // contract
-        trie.load_proof(EIP1186ProofResponse {
+        trie.load_proof(EIP1186AccountProofResponse {
             address: "0x730E01e70B028b44a9387119d78E1392E4848Cbc"
                 .parse()
                 .unwrap(),
@@ -123,16 +122,16 @@ mod tests {
                 .parse()
                 .unwrap(),
             storage_proof: vec![
-                StorageProof {
-                    key: "0x0000000000000000000000000000000000000000000000000000000000000001".parse().unwrap(),
+                EIP1186StorageProof {
+                    key: hex!("0000000000000000000000000000000000000000000000000000000000000001").into(),
                     value: "0x2".parse().unwrap(),
                     proof: vec![
                         "0xf85180808080a03f39d7bf4be8677b2d7db8f944e618380c443e7615adddd29b4cba751d7acdc5808080808080a0236e8f61ecde6abfebc6c529441f782f62469d8a2cc47b7aace2c136bd3b1ff08080808080".parse().unwrap(),
                         "0xe2a0310e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf602".parse().unwrap()
                     ],
                 },
-                StorageProof {
-                    key: "0x0000000000000000000000000000000000000000000000000000000000000002".parse().unwrap(),
+                EIP1186StorageProof {
+                    key: hex!("0000000000000000000000000000000000000000000000000000000000000002").into(),
                     value: "0x4".parse().unwrap(),
                     proof: vec![
                         "0xf85180808080a03f39d7bf4be8677b2d7db8f944e618380c443e7615adddd29b4cba751d7acdc5808080808080a0236e8f61ecde6abfebc6c529441f782f62469d8a2cc47b7aace2c136bd3b1ff08080808080".parse().unwrap(),
@@ -143,7 +142,7 @@ mod tests {
         }).unwrap();
 
         // tx sender
-        trie.load_proof(EIP1186ProofResponse {
+        trie.load_proof(EIP1186AccountProofResponse {
             address: "0x3736b9d9d35d8c4f41d98a412fe9211024453575"
                 .parse()
                 .unwrap(),
@@ -214,10 +213,10 @@ mod tests {
                 (
                     "0xc7696b27830dd8aa4823a1cba8440c27c36adec4", // tx2 - dest
                     vec![
-                        H256::from_uint(&U256::from(8)),
-                        H256::from_uint(&U256::from(9)),
-                        H256::from_uint(&U256::from(0xa)),
-                        H256::from_uint(&U256::from(0xb)),
+                        U256::from(8).into(),
+                        U256::from(9).into(),
+                        U256::from(0xa).into(),
+                        U256::from(0xb).into(),
                     ],
                 ),
                 // ("0x120a270bbc009644e35f0bb6ab13f95b8199c4ad", vec![]), // tx3 - sender
@@ -243,7 +242,7 @@ mod tests {
                 // ("0xE68D2582D54Cd865C8FecD9733525d60BE68af67", vec![]), // tx5 - sender
                 (
                     "0xBB9bc244D798123fDe783fCc1C72d3Bb8C189413", // tx5 - dest
-                    vec![H256::from_str(
+                    vec![B256::from_str(
                         "0x26e91fb58c30a80e3b2a8a4e671deffbfb6d0327c8e58a194296183d922ee994",
                     )
                     .unwrap()],
@@ -253,7 +252,7 @@ mod tests {
                 // ("0x4B8a25120682Dc5a5696D21C6D65f98442C7752F", vec![]), // tx7 - sender
                 (
                     "0xb4bfEfC30A60B87380e377F8B96CC3b2E65A8F64", // tx7 - dest
-                    vec![H256::from_uint(&U256::from(7))],
+                    vec![U256::from(7).into()],
                 ),
                 // ("0x6bd0F7D1c3b3eB168b9CA96BD7872A41e2D4EEc5", vec![]), // tx8 - sender
                 // ("0xAA1A6e3e6EF20068f7F8d8C835d2D22fd5116444", vec![]), // tx8 - dest
@@ -281,41 +280,41 @@ mod tests {
                 (
                     "0x223c067f8cf28ae173ee5cafea60ca44c335fecb",
                     vec![
-                        h256("0x4ed5cc1799140f8970f6cb1e2b26eb6f4bcb5d9f47b28a05c7b53990726b6316"),
-                        h256("0x559b56bd34a05a78c8e05fb25a99f5bfdb4d0187b8312c1f13c4a43bffc44a1c"),
-                        h256("0x67f6511307d36032b2e9898c6cfc32bd1d44c3678188fab0a274788aadcd4ea9"),
-                        h256("0x741c3ce27b9496848ce3d746dfbb350a81bf84761afd1c73e2e336b4761531f8"),
-                        h256("0x8381f7ae1ed45cef1a1f91a1147448f95d1b9754b5deab7fefc519f0204a231a"),
-                        h256("0x8a0a9473d29e8c7b8736e7fa14a1b564ab279b85070147afa03510d5e3876718"),
-                        h256("0xa829c1a2c447151400e2f59ea5cd3bb2c721284d710ba9ae38d33f79262766f5"),
-                        h256("0xd5a64edbcdbf33ad317d05930f46688f52e3894c119dcb77a171fe0e2b828645"),
-                        h256("0xd8868749a549cdf3dd788aa13f8ba78de70fbfe32b778b11fe6231b1a7b2afeb"),
-                        h256("0xebfe13cda419e512112a28e25b50d0851d30747991323298d2d973c8ca707299"),
+                        b256!("4ed5cc1799140f8970f6cb1e2b26eb6f4bcb5d9f47b28a05c7b53990726b6316"),
+                        b256!("559b56bd34a05a78c8e05fb25a99f5bfdb4d0187b8312c1f13c4a43bffc44a1c"),
+                        b256!("67f6511307d36032b2e9898c6cfc32bd1d44c3678188fab0a274788aadcd4ea9"),
+                        b256!("741c3ce27b9496848ce3d746dfbb350a81bf84761afd1c73e2e336b4761531f8"),
+                        b256!("8381f7ae1ed45cef1a1f91a1147448f95d1b9754b5deab7fefc519f0204a231a"),
+                        b256!("8a0a9473d29e8c7b8736e7fa14a1b564ab279b85070147afa03510d5e3876718"),
+                        b256!("a829c1a2c447151400e2f59ea5cd3bb2c721284d710ba9ae38d33f79262766f5"),
+                        b256!("d5a64edbcdbf33ad317d05930f46688f52e3894c119dcb77a171fe0e2b828645"),
+                        b256!("d8868749a549cdf3dd788aa13f8ba78de70fbfe32b778b11fe6231b1a7b2afeb"),
+                        b256!("ebfe13cda419e512112a28e25b50d0851d30747991323298d2d973c8ca707299"),
                     ],
                 ),
                 ("0xd2fef1b7430f09248199c050d6ef88438db3412b", vec![]),
                 (
                     "0xdefa4e8a7bcba345f687a2f1456f5edd9ce97202",
                     vec![
-                        h256("0x8e7bd20143abadbb1c5cafefe7d7c5d642fa57fb71a0e6bf4857fa892ace0cb2"),
-                        h256("0xb4ee76afbe01a813128bda1bb169a7b1775426a16cebc5ca2756ef072f0c130d"),
+                        b256!("8e7bd20143abadbb1c5cafefe7d7c5d642fa57fb71a0e6bf4857fa892ace0cb2"),
+                        b256!("b4ee76afbe01a813128bda1bb169a7b1775426a16cebc5ca2756ef072f0c130d"),
                     ],
                 ),
                 (
                     "0x000000000000ad05ccc4f10045630fb830b95127",
                     vec![
-                        h256("0x05873c04107d9a1c355ffcc1d65c20deccc12d1155f84ec452aa707c1e31c485"),
-                        h256("0x581bd4b3c52be7d5b894791147ff5c91f9aaaf494a5f209885c25b77e81a065c"),
-                        h256("0x765107b61378a6b71d38aa9b8dc45546c56ef73a6e876380fb6990e895289e79"),
-                        h256("0x7d2d28222eb638fdf3d65cce8281eba6c28276742ceedeed5d4b2928cd59f7ff"),
-                        h256("0x88660ca3dd80a41d8e83eeef12df1cf1f509718c1427d560b3e62e88ce061b79"),
-                        h256("0x955ba99f920729174d6e0f5f8b9e60dccb11adfab0d8c7162786c4e4f36563b9"),
-                        h256("0xac6ed68286b1e05cd2ebb5852b3baecc2ff853fee497fdb5adb207a4170bfdc1"),
-                        h256("0xb4982e75182d708ae9d930cba208cb7890a7babe25bfebca9c0964898103d2ec"),
-                        h256("0xe2aed8ef98b607bcdaabf99019b01f8edc4b94dcf0633b67de60b6e960cbde49"),
-                        h256("0xf0c35f9df9da887a10383fb2fc9c8627b7252bc0765d56d9f68c86e692b356d3"),
-                        h256("0xf1eeeff8b324f435b3fdf264b4d206e53eb67eb2d18085b09fa0c95700a3bfb1"),
-                        h256("0xfbb3e5ac86e9cbde1ce472bb799f41bb0b3fc776285db1294d61ad10ff83ca36"),
+                        b256!("05873c04107d9a1c355ffcc1d65c20deccc12d1155f84ec452aa707c1e31c485"),
+                        b256!("581bd4b3c52be7d5b894791147ff5c91f9aaaf494a5f209885c25b77e81a065c"),
+                        b256!("765107b61378a6b71d38aa9b8dc45546c56ef73a6e876380fb6990e895289e79"),
+                        b256!("7d2d28222eb638fdf3d65cce8281eba6c28276742ceedeed5d4b2928cd59f7ff"),
+                        b256!("88660ca3dd80a41d8e83eeef12df1cf1f509718c1427d560b3e62e88ce061b79"),
+                        b256!("955ba99f920729174d6e0f5f8b9e60dccb11adfab0d8c7162786c4e4f36563b9"),
+                        b256!("ac6ed68286b1e05cd2ebb5852b3baecc2ff853fee497fdb5adb207a4170bfdc1"),
+                        b256!("b4982e75182d708ae9d930cba208cb7890a7babe25bfebca9c0964898103d2ec"),
+                        b256!("e2aed8ef98b607bcdaabf99019b01f8edc4b94dcf0633b67de60b6e960cbde49"),
+                        b256!("f0c35f9df9da887a10383fb2fc9c8627b7252bc0765d56d9f68c86e692b356d3"),
+                        b256!("f1eeeff8b324f435b3fdf264b4d206e53eb67eb2d18085b09fa0c95700a3bfb1"),
+                        b256!("fbb3e5ac86e9cbde1ce472bb799f41bb0b3fc776285db1294d61ad10ff83ca36"),
                     ],
                 ),
                 ("0xa9c501101c7b165090abb56e95efe1129df9deac", vec![]),
@@ -323,145 +322,145 @@ mod tests {
                 (
                     "0xf8209a55a4579207610a9ecd080bf3b8899d0e69",
                     vec![
-                        h256("0x0f855abb425e56be71ca5f41ba64693017288350b1dc51c9488e7932362f0f31"),
-                        h256("0x1d8b3b4cd580c40fcee564e25b0de53511f67b52afc8a5ca6e9796aa6907fd70"),
-                        h256("0x2866278dff3c88097dcbaf36d12715e5f4d5cd309777287eaa27ec795fde677e"),
-                        h256("0x47153833bf554111cd1f0d6f19f5b928adcdeb05b059132c111d0277125c53ae"),
-                        h256("0x4a973af77728ddab7b48612b67c1d115fa20f766287e9ad5d7c2f118b1870bdc"),
-                        h256("0x85cd0176aac07ae7d728794d55969ce1ef7e66877ed0b03b95ad2ae41aae6824"),
-                        h256("0x9cd2d01ded64acdd811a7584d4b7ec2fe309e0f0eda2f72dcf8cfd717574523d"),
-                        h256("0xb87ce1a1a088fefe63e85d2e1e5a87753c4a2b1424952dd26eeee91cca58002a"),
-                        h256("0xcce71f475fe43afd6414efed2a3597909dec86bf719157e83f3eb7fb08a4ee2e"),
-                        h256("0xf3d95b9636fd2337d434d540524d2d32c84eaae6f688d567a2d12196c7614ecb"),
+                        b256!("0f855abb425e56be71ca5f41ba64693017288350b1dc51c9488e7932362f0f31"),
+                        b256!("1d8b3b4cd580c40fcee564e25b0de53511f67b52afc8a5ca6e9796aa6907fd70"),
+                        b256!("2866278dff3c88097dcbaf36d12715e5f4d5cd309777287eaa27ec795fde677e"),
+                        b256!("47153833bf554111cd1f0d6f19f5b928adcdeb05b059132c111d0277125c53ae"),
+                        b256!("4a973af77728ddab7b48612b67c1d115fa20f766287e9ad5d7c2f118b1870bdc"),
+                        b256!("85cd0176aac07ae7d728794d55969ce1ef7e66877ed0b03b95ad2ae41aae6824"),
+                        b256!("9cd2d01ded64acdd811a7584d4b7ec2fe309e0f0eda2f72dcf8cfd717574523d"),
+                        b256!("b87ce1a1a088fefe63e85d2e1e5a87753c4a2b1424952dd26eeee91cca58002a"),
+                        b256!("cce71f475fe43afd6414efed2a3597909dec86bf719157e83f3eb7fb08a4ee2e"),
+                        b256!("f3d95b9636fd2337d434d540524d2d32c84eaae6f688d567a2d12196c7614ecb"),
                     ],
                 ),
                 ("0xfaf3d9f29eb3c452a5f55333eb30a71e05ca0d7b", vec![]),
                 (
                     "0x32400084c286cf3e17e7b677ea9583e60a000324",
                     vec![
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000011"),
-                        h256("0x302f86ca25b61bbb68b67dee865a898a25a7808a3a42f509abb2c40b151d18a6"),
-                        h256("0x302f86ca25b61bbb68b67dee865a898a25a7808a3a42f509abb2c40b151d18a7"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000011"),
+                        b256!("302f86ca25b61bbb68b67dee865a898a25a7808a3a42f509abb2c40b151d18a6"),
+                        b256!("302f86ca25b61bbb68b67dee865a898a25a7808a3a42f509abb2c40b151d18a7"),
                     ],
                 ),
                 (
                     "0x7b12d855445073987d45ea97b1af3554f05e4ef4",
                     vec![
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000000"),
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000001"),
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000004"),
-                        h256("0x000000000000000000000000000000000000000000000000000000000000003d"),
-                        h256("0x7f110f67a16c8a756ff06ae3a45a7a031dee65b9b3aa77480c6741f08a15ed4f"),
-                        h256("0x7f110f67a16c8a756ff06ae3a45a7a031dee65b9b3aa77480c6741f08a15ed50"),
-                        h256("0x7f110f67a16c8a756ff06ae3a45a7a031dee65b9b3aa77480c6741f08a15ed51"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000000"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000001"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000004"),
+                        b256!("000000000000000000000000000000000000000000000000000000000000003d"),
+                        b256!("7f110f67a16c8a756ff06ae3a45a7a031dee65b9b3aa77480c6741f08a15ed4f"),
+                        b256!("7f110f67a16c8a756ff06ae3a45a7a031dee65b9b3aa77480c6741f08a15ed50"),
+                        b256!("7f110f67a16c8a756ff06ae3a45a7a031dee65b9b3aa77480c6741f08a15ed51"),
                     ],
                 ),
                 (
                     "0x8355dbe8b0e275abad27eb843f3eaf3fc855e525",
                     vec![
-                        h256("0x4edbdc8504b37c6703b007021f1c680218a1eb68f35811ab755c23663f2d286b"),
-                        h256("0xa4b963403dffa17904235058edbfb3145b04ee6aaafceb0cf39390abba810d16"),
-                        h256("0xa968518babf3e68e7ce381ad2c64a5d6e04f917fa359e30e71f4634d8e9a3e0d"),
+                        b256!("4edbdc8504b37c6703b007021f1c680218a1eb68f35811ab755c23663f2d286b"),
+                        b256!("a4b963403dffa17904235058edbfb3145b04ee6aaafceb0cf39390abba810d16"),
+                        b256!("a968518babf3e68e7ce381ad2c64a5d6e04f917fa359e30e71f4634d8e9a3e0d"),
                     ],
                 ),
                 (
                     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
                     vec![
-                        h256("0x865a6a6392c535c7918948bd344e26e4ea1c6dd78a498b858e48ac288c232e6d"),
-                        h256("0xf88e7b8bfd936f5fe4e26ed7fba8916753e028879b7aeafe0a3f899f75b619d1"),
-                        h256("0x7601405ddb1e286b59c5ecf315554572c02d24fcac647c3f4771d43a3b18d3c7"),
-                        h256("0xf88e7b8bfd936f5fe4e26ed7fba8916753e028879b7aeafe0a3f899f75b619d1"),
+                        b256!("865a6a6392c535c7918948bd344e26e4ea1c6dd78a498b858e48ac288c232e6d"),
+                        b256!("f88e7b8bfd936f5fe4e26ed7fba8916753e028879b7aeafe0a3f899f75b619d1"),
+                        b256!("7601405ddb1e286b59c5ecf315554572c02d24fcac647c3f4771d43a3b18d3c7"),
+                        b256!("f88e7b8bfd936f5fe4e26ed7fba8916753e028879b7aeafe0a3f899f75b619d1"),
                     ],
                 ),
                 (
                     "0x34bff2dbf20cf39db042cb68d42d6d06fdbd85d3",
                     vec![
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000000"),
-                        h256("0x63e0bd48312faa8e0a7e4d671ca876d828603bb8f9737bb4ea121f262d95c5d8"),
-                        h256("0xb3a417db84a0c1ea9f7fb81726fd220d585e052c64ae94980a282e770cc3591a"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000000"),
+                        b256!("63e0bd48312faa8e0a7e4d671ca876d828603bb8f9737bb4ea121f262d95c5d8"),
+                        b256!("b3a417db84a0c1ea9f7fb81726fd220d585e052c64ae94980a282e770cc3591a"),
                     ],
                 ),
                 (
                     "0xb846f231b102f98e727d2b9403822025f53a16c9",
                     vec![
-                        h256("0x0b7b9bb96073fee0e0e0ff8cf9cd791f1869eb1f1fd64f6e0e23a446cf4cb94a"),
-                        h256("0xf4c3ac6f6addda300b3fa09a902ac6f69ede11ccdd54f35269c76d7809f972fa"),
-                        h256("0x0b7b9bb96073fee0e0e0ff8cf9cd791f1869eb1f1fd64f6e0e23a446cf4cb94a"),
-                        h256("0xe89ad6fcb24dd33070a4f3b3f19fcedcf0ae43b3578e4a8afda85e0ad96f3a8e"),
+                        b256!("0b7b9bb96073fee0e0e0ff8cf9cd791f1869eb1f1fd64f6e0e23a446cf4cb94a"),
+                        b256!("f4c3ac6f6addda300b3fa09a902ac6f69ede11ccdd54f35269c76d7809f972fa"),
+                        b256!("0b7b9bb96073fee0e0e0ff8cf9cd791f1869eb1f1fd64f6e0e23a446cf4cb94a"),
+                        b256!("e89ad6fcb24dd33070a4f3b3f19fcedcf0ae43b3578e4a8afda85e0ad96f3a8e"),
                     ],
                 ),
                 (
                     "0xcda3d331eee54e5b2224270e40f24d96abd469d0",
                     vec![
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000008"),
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000009"),
-                        h256("0x000000000000000000000000000000000000000000000000000000000000000a"),
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000008"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000008"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000009"),
+                        b256!("000000000000000000000000000000000000000000000000000000000000000a"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000008"),
                     ],
                 ),
                 (
                     "0x34b6f33a5d88fca1b8f78a510bc81673611a68f0",
                     vec![
-                        h256("0x777c769dc952b1c37981a3295de630891614b5d3b68be3496e0436ccb4a2b72f"),
-                        h256("0xad48816186e86821c4acbba1997d893141d45ec5ee1db2731bd4b4d1dde5cb12"),
-                        h256("0xe536cd49fce012151cdde3d9afc024d885695ef64673b9874adf011c76214865"),
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000008"),
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000009"),
-                        h256("0x000000000000000000000000000000000000000000000000000000000000000a"),
+                        b256!("777c769dc952b1c37981a3295de630891614b5d3b68be3496e0436ccb4a2b72f"),
+                        b256!("ad48816186e86821c4acbba1997d893141d45ec5ee1db2731bd4b4d1dde5cb12"),
+                        b256!("e536cd49fce012151cdde3d9afc024d885695ef64673b9874adf011c76214865"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000008"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000009"),
+                        b256!("000000000000000000000000000000000000000000000000000000000000000a"),
                     ],
                 ),
                 (
                     "0xd098e127664e069a9d23fbd7260c350d5fe4b762",
                     vec![
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000002"),
-                        h256("0x777c769dc952b1c37981a3295de630891614b5d3b68be3496e0436ccb4a2b72f"),
-                        h256("0xde9a891e34e7a23fc0a635179096ff893d75af517f9656744b23d09615649ac5"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000002"),
+                        b256!("777c769dc952b1c37981a3295de630891614b5d3b68be3496e0436ccb4a2b72f"),
+                        b256!("de9a891e34e7a23fc0a635179096ff893d75af517f9656744b23d09615649ac5"),
                     ],
                 ),
                 (
                     "0x0fe0ed7f146cb12e4b9759aff4fa8d34571802ca",
                     vec![
-                        h256("0x2d39f701dd19906860d2244928568bb36c7bc2de5ff4539715f11d5c633b7bbf"),
-                        h256("0x129083dd67f8dd2cb530539087ee1554f5b559ab4d285fc8d8c3b2c684671ce6"),
-                        h256("0x7601405ddb1e286b59c5ecf315554572c02d24fcac647c3f4771d43a3b18d3c7"),
+                        b256!("2d39f701dd19906860d2244928568bb36c7bc2de5ff4539715f11d5c633b7bbf"),
+                        b256!("129083dd67f8dd2cb530539087ee1554f5b559ab4d285fc8d8c3b2c684671ce6"),
+                        b256!("7601405ddb1e286b59c5ecf315554572c02d24fcac647c3f4771d43a3b18d3c7"),
                     ],
                 ),
                 (
                     "0x86ac86af1fd9a2cb586a19e325be5d68439a6f31",
                     vec![
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000000"),
-                        h256("0x0211af8eab958379d8d05707843dfacf56049244e26c2f4f151affa0fffac006"),
-                        h256("0x152e6b9a3615cd112cb841c8ccb9eda76ba2e6c5384b74024e278d344defa0dc"),
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000000"),
-                        h256("0x2bc459b44bf35451fea5aa6500dd6d4b12e1461acffc64d20bb15bbaa5353d41"),
-                        h256("0x98ea38872026529b4b56a83df4b50e8143da79063584859223c7308ac5232d3a"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000000"),
+                        b256!("0211af8eab958379d8d05707843dfacf56049244e26c2f4f151affa0fffac006"),
+                        b256!("152e6b9a3615cd112cb841c8ccb9eda76ba2e6c5384b74024e278d344defa0dc"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000000"),
+                        b256!("2bc459b44bf35451fea5aa6500dd6d4b12e1461acffc64d20bb15bbaa5353d41"),
+                        b256!("98ea38872026529b4b56a83df4b50e8143da79063584859223c7308ac5232d3a"),
                     ],
                 ),
                 (
                     "0x162fcc2f28a5578983db2f92a2c49ce017929253",
                     vec![
-                        h256("0x0000000000000000000000000000000000000000000000000000000000000065"),
-                        h256("0x000000000000000000000000000000000000000000000000000000000000006c"),
-                        h256("0x32fc32e8e6a367a782c09a02fa01aab4c63a2b183ce5fee9b74a77503c0667c7"),
+                        b256!("0000000000000000000000000000000000000000000000000000000000000065"),
+                        b256!("000000000000000000000000000000000000000000000000000000000000006c"),
+                        b256!("32fc32e8e6a367a782c09a02fa01aab4c63a2b183ce5fee9b74a77503c0667c7"),
                     ],
                 ),
                 (
                     "0xe7d3982e214f9dfd53d23a7f72851a7044072250",
                     vec![
-                        h256("0x47c0af10abef115aa6d20afe6445384b4c0b5191d6a10c5f3bdefc5746497c30"),
-                        h256("0x73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f02c"),
-                        h256("0x73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f02e"),
-                        h256("0x73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f02f"),
-                        h256("0x73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f030"),
-                        h256("0x73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f031"),
-                        h256("0x8ca5112eed2c6ac8cf9072253f1c272d0a234f7b0d784544d3e6342af28208fe"),
-                        h256("0x8ca5112eed2c6ac8cf9072253f1c272d0a234f7b0d784544d3e6342af28208ff"),
+                        b256!("47c0af10abef115aa6d20afe6445384b4c0b5191d6a10c5f3bdefc5746497c30"),
+                        b256!("73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f02c"),
+                        b256!("73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f02e"),
+                        b256!("73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f02f"),
+                        b256!("73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f030"),
+                        b256!("73ebe2e83b2db87beceedf6a6e9b809f1393403496b4b6e52e26f15059a7f031"),
+                        b256!("8ca5112eed2c6ac8cf9072253f1c272d0a234f7b0d784544d3e6342af28208fe"),
+                        b256!("8ca5112eed2c6ac8cf9072253f1c272d0a234f7b0d784544d3e6342af28208ff"),
                     ],
                 ),
                 (
                     "0x11a2e73bada26f184e3d508186085c72217dc014",
-                    vec![h256(
-                        "0x0000000000000000000000000000000000000000000000000000000000000001",
+                    vec![b256!(
+                        "0000000000000000000000000000000000000000000000000000000000000001"
                     )],
                 ),
                 ("0xda98fff5bb4f3f12af1181ada590b511ef5ef7a2", vec![]),
@@ -470,43 +469,39 @@ mod tests {
         .await;
     }
 
-    fn h256(str: &str) -> H256 {
-        H256::from_str(str).unwrap()
-    }
-
-    pub async fn test_mainnet_block(block_number: u64, account_slots: Vec<(&str, Vec<H256>)>) {
+    pub async fn test_mainnet_block(block_number: u64, account_slots: Vec<(&str, Vec<B256>)>) {
         let rpc_url = env::var("RPC").expect("pass RPC env var");
-        let provider = Provider::try_from(rpc_url).unwrap();
+        let provider = ProviderBuilder::new().on_http(Url::parse(rpc_url.as_str()).unwrap());
 
-        let prev_block_number = Some(BlockId::Number(BlockNumber::from(block_number - 1)));
-        let current_block_number = Some(BlockId::Number(BlockNumber::from(block_number)));
+        let prev_block_number = BlockId::Number(BlockNumberOrTag::Number(block_number - 1));
+        let current_block_number = BlockId::Number(BlockNumberOrTag::Number(block_number));
 
         let prev_block = provider
-            .get_block(prev_block_number.unwrap())
+            .get_block(prev_block_number, BlockTransactionsKind::Hashes)
             .await
             .unwrap()
             .unwrap();
         let current_block = provider
-            .get_block_with_txs(current_block_number.unwrap())
+            .get_block(current_block_number, BlockTransactionsKind::Full)
             .await
             .unwrap()
             .unwrap();
 
-        let mut state_trie = StateTrie::from_root(prev_block.state_root);
+        let mut state_trie = StateTrie::from_root(prev_block.header.state_root);
 
         // pick addresses which might have their state changed from block data
-        let mut account_slots_parsed: Vec<(Address, Vec<H256>)> = account_slots
+        let mut account_slots_parsed: Vec<(Address, Vec<B256>)> = account_slots
             .clone()
             .iter()
             .map(|(addr, slots)| (addr.parse::<Address>().unwrap(), slots.clone()))
             .collect();
-        account_slots_parsed.push((current_block.author.unwrap(), vec![]));
-        for tx in current_block.transactions {
+        account_slots_parsed.push((current_block.header.miner, vec![]));
+        for tx in current_block.transactions.as_transactions().unwrap() {
             account_slots_parsed.push((tx.from, vec![]));
             if tx.to.is_some() {
                 account_slots_parsed.push((tx.to.unwrap(), vec![]));
             } else {
-                let contract_address = ethers::utils::get_contract_address(tx.from, tx.nonce);
+                let contract_address = get_contract_address(tx.from, U256::from(tx.nonce));
                 account_slots_parsed.push((contract_address, vec![]));
             }
         }
@@ -514,7 +509,8 @@ mod tests {
         // download EIP-1186 state proofs for addresses and slots
         for (address, slots) in account_slots_parsed.clone() {
             let proof = provider
-                .get_proof(address, slots, prev_block_number)
+                .get_proof(address, slots)
+                .block_id(prev_block_number)
                 .await
                 .unwrap();
 
@@ -524,16 +520,19 @@ mod tests {
         // update state on our trie.
         for (address, slots) in account_slots_parsed {
             let new_balance = provider
-                .get_balance(address, current_block_number)
+                .get_balance(address)
+                .block_id(current_block_number)
                 .await
                 .unwrap();
             let new_nonce = provider
-                .get_transaction_count(address, current_block_number)
+                .get_transaction_count(address)
+                .block_id(current_block_number)
                 .await
                 .unwrap();
-            let new_code_hash = H256::from(keccak256(
+            let new_code_hash = B256::from(keccak256(
                 provider
-                    .get_code(address, current_block_number)
+                    .get_code_at(address)
+                    .block_id(current_block_number)
                     .await
                     .unwrap(),
             ));
@@ -544,7 +543,7 @@ mod tests {
                 .unwrap();
             state_trie
                 .account_trie
-                .set_nonce(address, new_nonce)
+                .set_nonce(address, U256::from(new_nonce))
                 .unwrap();
             state_trie
                 .account_trie
@@ -553,18 +552,34 @@ mod tests {
 
             for slot in slots {
                 let value = provider
-                    .get_storage_at(address, slot, current_block_number)
+                    .get_storage_at(address, slot.into())
+                    .block_id(current_block_number)
                     .await
                     .unwrap();
-                let _slot = U256::from_big_endian(slot.as_bytes());
-                let _value = U256::from_big_endian(value.as_bytes());
-                state_trie
-                    .set_storage_value(address, _slot, _value)
-                    .unwrap();
+                let _slot = U256::from_be_bytes(slot.into());
+                state_trie.set_storage_value(address, _slot, value).unwrap();
             }
         }
 
         let calculated_root = state_trie.root().unwrap();
-        assert_eq!(calculated_root, current_block.state_root);
+        assert_eq!(calculated_root, current_block.header.state_root);
+    }
+
+    /// The address for an Ethereum contract is deterministically computed from the
+    /// address of its creator (sender) and how many transactions the creator has
+    /// sent (nonce). The sender and nonce are RLP encoded and then hashed with Keccak-256.
+    pub fn get_contract_address(sender: impl Into<Address>, nonce: impl Into<U256>) -> Address {
+        let mut stream = rlp::RlpStream::new();
+        stream.begin_list(2);
+        let sender: Address = sender.into();
+        let nonce: U256 = nonce.into();
+        stream.append(&sender.as_slice());
+        stream.append(&nonce.to_be_bytes_vec()); // NOTE: not sure BE or LE
+
+        let hash = keccak256(&stream.out());
+
+        let mut bytes = [0u8; 20];
+        bytes.copy_from_slice(&hash[12..]);
+        Address::from(bytes)
     }
 }

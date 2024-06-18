@@ -5,42 +5,37 @@ use crate::{
     Error,
 };
 
-use bytes::BytesMut;
-use ethers::{
-    types::{BigEndianHash, Bytes, H256, U256},
-    utils::{
-        keccak256,
-        rlp::{self, Rlp},
-    },
-};
-
+use alloy_primitives::{keccak256, Bytes, B256, U256};
+use alloy_rlp::BytesMut;
+use rlp::Rlp;
 pub type StorageTrie = Trie<U256, U256>;
 
 impl MptKey for U256 {
     fn to_nibbles(&self) -> Result<Nibbles, Error> {
-        Ok(Nibbles::from_raw_path(Bytes::from(
-            H256::from(keccak256(Bytes::from(
-                H256::from_uint(self).as_bytes().to_vec(),
-            )))
-            .as_bytes()
-            .to_vec(),
-        )))
+        let hashed = keccak256(B256::from(*self)).clone();
+        Ok(Nibbles::from_raw_path(hashed.into()))
     }
 }
 
 impl LeafValue for U256 {
-    fn from_raw_rlp(raw: ethers::types::Bytes) -> Result<Self, crate::Error> {
+    fn from_raw_rlp(raw: Bytes) -> Result<Self, crate::Error> {
         let rlp = Rlp::new(&raw);
-        let bytes = rlp.data()?.to_owned();
-        Ok(U256::from_big_endian(bytes.to_vec().as_slice()))
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(
+            rlp.data()?
+                .to_owned()
+                .get(0..32)
+                .ok_or(Error::InternalError("Invalid RLP data"))?,
+        );
+        Ok(U256::from_be_bytes(bytes.to_owned()))
     }
 
-    fn to_raw_rlp(&self) -> Result<ethers::types::Bytes, crate::Error> {
+    fn to_raw_rlp(&self) -> Result<Bytes, crate::Error> {
         if self.is_zero() {
             return Ok(Bytes::from(vec![0]));
         }
 
-        let mut vec = H256::from_uint(self).as_bytes().to_vec();
+        let mut vec = B256::from(*self).to_vec();
         loop {
             if vec[0] == 0 {
                 vec.remove(0);
@@ -59,10 +54,7 @@ impl LeafValue for U256 {
 mod tests {
     use std::str::FromStr;
 
-    use ethers::{
-        types::{Bytes, U256},
-        utils::hex,
-    };
+    use alloy_primitives::{hex, Bytes, U256};
 
     use crate::{nodes::LeafValue, trie::MptKey};
 

@@ -6,20 +6,16 @@ use crate::{
     trie::{MptKey, Trie},
     Error,
 };
-use ethers::{
-    types::{Address, Bytes, H256, U256},
-    utils::{
-        keccak256,
-        rlp::{Rlp, RlpStream},
-    },
-};
+
+use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
+use rlp::{Rlp, RlpStream};
 
 pub type AccountTrie = Trie<Address, AccountData>;
 
 impl MptKey for Address {
     fn to_nibbles(&self) -> Result<Nibbles, Error> {
         Ok(Nibbles::from_raw_path(Bytes::from(
-            H256::from(keccak256(self)).as_bytes().to_vec(),
+            B256::from(keccak256(self)).to_vec(),
         )))
     }
 }
@@ -37,7 +33,7 @@ impl AccountTrie {
         self.set(address, data)
     }
 
-    pub fn set_code_hash(&mut self, address: Address, new_code_hash: H256) -> Result<(), Error> {
+    pub fn set_code_hash(&mut self, address: Address, new_code_hash: B256) -> Result<(), Error> {
         let mut data = self.get(address)?;
         data.code_hash = new_code_hash;
         self.set(address, data)
@@ -48,28 +44,29 @@ impl AccountTrie {
 pub struct AccountData {
     pub nonce: U256,
     pub balance: U256,
-    pub storage_root: H256,
-    pub code_hash: H256,
+    pub storage_root: B256,
+    pub code_hash: B256,
 }
 
 impl LeafValue for AccountData {
     fn from_raw_rlp(raw: Bytes) -> Result<Self, Error> {
         let rlp = Rlp::new(&raw);
         Ok(Self {
-            nonce: rlp.val_at(0)?,
-            balance: rlp.val_at(1)?,
-            storage_root: rlp.val_at(2)?,
-            code_hash: rlp.val_at(3)?,
+            nonce: U256::from(rlp.val_at::<u64>(0)?),
+            balance: U256::from(rlp.val_at::<u64>(1)?),
+            storage_root: B256::from_slice(&rlp.val_at::<Vec<u8>>(2)?),
+            code_hash: B256::from_slice(&rlp.val_at::<Vec<u8>>(3)?),
         })
     }
 
     fn to_raw_rlp(&self) -> Result<Bytes, Error> {
         let mut rlp_stream = RlpStream::default();
         rlp_stream.begin_list(4);
-        rlp_stream.append(&self.nonce);
-        rlp_stream.append(&self.balance);
-        rlp_stream.append(&self.storage_root);
-        rlp_stream.append(&self.code_hash);
+        // MEGA-CURSED CODE AHEAD
+        rlp_stream.append(&self.nonce.to_be_bytes_vec().as_slice());
+        rlp_stream.append(&self.balance.to_be_bytes_vec().as_slice());
+        rlp_stream.append(&self.storage_root.0.as_slice());
+        rlp_stream.append(&self.code_hash.0.as_slice());
         Ok(Bytes::from(rlp_stream.out().to_vec()))
     }
 }
@@ -77,13 +74,13 @@ impl LeafValue for AccountData {
 impl Default for AccountData {
     fn default() -> Self {
         Self {
-            nonce: U256::zero(),
-            balance: U256::zero(),
-            storage_root: H256::from_str(
+            nonce: U256::ZERO,
+            balance: U256::ZERO,
+            storage_root: B256::from_str(
                 "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
             )
             .unwrap(),
-            code_hash: H256::from_str(
+            code_hash: B256::from_str(
                 "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
             )
             .unwrap(),
@@ -97,9 +94,8 @@ mod tests {
 
     use crate::trie::MptKey;
 
-    use super::{AccountData, AccountTrie, Address, LeafValue, U256};
-    use ethers::core::utils::hex;
-    use ethers::utils::parse_ether;
+    use super::{AccountData, AccountTrie, LeafValue};
+    use alloy_primitives::{hex, utils::parse_ether, Address, U256};
 
     #[test]
     pub fn test_from_address_1() {
@@ -168,8 +164,8 @@ mod tests {
         trie.load_proof(
             sender,
             AccountData {
-                nonce: U256::from("0x2a127"),
-                balance: U256::from("0xb5248f2ebf8f5db4ef"),
+                nonce: U256::from_str("0x2a127").unwrap(),
+                balance: U256::from_str("0xb5248f2ebf8f5db4ef").unwrap(),
                 storage_root: "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
                     .parse()
                     .unwrap(),
@@ -190,8 +186,8 @@ mod tests {
         trie.load_proof(
             receiver,
             AccountData {
-                nonce: U256::from("0x20d"),
-                balance: U256::from("0x175a0778"),
+                nonce: U256::from_str("0x20d").unwrap(),
+                balance: U256::from_str("0x175a0778").unwrap(),
                 storage_root: "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
                     .parse()
                     .unwrap(),
@@ -213,8 +209,8 @@ mod tests {
         trie.load_proof(
             miner,
             AccountData {
-                nonce: U256::from("0x2651"),
-                balance: U256::from("0x43cc248fcad9b3f3b0"),
+                nonce: U256::from_str("0x2651").unwrap(),
+                balance: U256::from_str("0x43cc248fcad9b3f3b0").unwrap(),
                 storage_root: "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
                     .parse()
                     .unwrap(),
@@ -239,12 +235,13 @@ mod tests {
         );
 
         // performing the state transition
-        trie.set_balance(sender, U256::from("0xb51619b5e016ea68ef"))
+        trie.set_balance(sender, U256::from_str("0xb51619b5e016ea68ef").unwrap())
             .unwrap();
-        trie.set_nonce(sender, U256::from("0x2a128")).unwrap();
-        trie.set_balance(receiver, U256::from("0xe71bde762c9b378"))
+        trie.set_nonce(sender, U256::from_str("0x2a128").unwrap())
             .unwrap();
-        trie.set_balance(miner, U256::from("0x44118bdc454bab93b0"))
+        trie.set_balance(receiver, U256::from_str("0xe71bde762c9b378").unwrap())
+            .unwrap();
+        trie.set_balance(miner, U256::from_str("0x44118bdc454bab93b0").unwrap())
             .unwrap();
 
         // state root on mainnet block 1000008
