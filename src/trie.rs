@@ -56,10 +56,9 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
                 return Ok(V::default());
             }
 
-            let node_data = self
-                .nodes
-                .get(&hash_current)
-                .ok_or(Error::InternalError("node not present, please add a proof"))?;
+            let node_data = self.nodes.get(&hash_current).ok_or(Error::InternalError(
+                "trie.get: node not present, please add a proof",
+            ))?;
 
             match node_data {
                 NodeData::Leaf { key, value } => {
@@ -118,10 +117,12 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
         let mut hash_updated: B256;
         loop {
             // temporarily remove node from the map, so we can insert updated node into the map.
-            let current_node = self
-                .nodes
-                .remove(&hash_items.current())
-                .ok_or(Error::InternalError("node not present, please add a proof"))?;
+            let current_node =
+                self.nodes
+                    .remove(&hash_items.current())
+                    .ok_or(Error::InternalError(
+                        "trie.set: node not present, please add a proof",
+                    ))?;
 
             // update current node if necessary.
             let current_node_updated = match current_node {
@@ -441,6 +442,8 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
 mod tests {
     const EMPTY_ROOT_STR: &str = "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421";
 
+    use super::EMPTY_ROOT_BYTES;
+
     use super::{MptKey, Nibbles, NodeData, Trie};
     use alloy_primitives::{hex, keccak256, Bytes, B256, U256};
 
@@ -456,6 +459,16 @@ mod tests {
                 keccak256(B256::from(U256::from(*self))).to_vec(),
             )))
         }
+    }
+
+    #[test]
+    fn test_empty_root() {
+        use std::str::FromStr;
+        assert_eq!(
+            EMPTY_ROOT_BYTES,
+            B256::from_str("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
+                .unwrap()
+        );
     }
 
     #[test]

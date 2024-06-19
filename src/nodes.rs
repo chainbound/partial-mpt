@@ -171,6 +171,7 @@ where
             }),
             17 => Ok({
                 let mut arr: [Option<B256>; 17] = Default::default();
+
                 for i in 0..17 {
                     let value = rlp.at(i)?.data()?.to_owned();
                     arr[i] = match value.len() {
@@ -232,7 +233,7 @@ where
                 hex::encode(value.to_owned().to_raw_rlp().unwrap())
             ),
             NodeData::Branch(branch) => format!(
-                "Branch({:?}",
+                "Branch({:?})",
                 branch
                     .iter()
                     .map(|node| {
@@ -301,8 +302,6 @@ mod tests {
         )
         .unwrap();
 
-        println!("node_data {:#?}", node_data);
-
         assert_eq!(
             node_data,
             NodeData::Leaf {
@@ -345,8 +344,6 @@ mod tests {
         )
         .unwrap();
 
-        println!("node_data {:#?}", node_data);
-
         assert_eq!(
             node_data,
             NodeData::Extension {
@@ -374,8 +371,6 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-
-        println!("node_data {:#?}", node_data);
 
         assert_eq!(
             node_data,

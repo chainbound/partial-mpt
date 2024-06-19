@@ -51,20 +51,20 @@ pub struct AccountData {
 impl LeafValue for AccountData {
     fn from_raw_rlp(raw: Bytes) -> Result<Self, Error> {
         let rlp = Rlp::new(&raw);
-        Ok(Self {
-            nonce: U256::from(rlp.val_at::<u64>(0)?),
-            balance: U256::from(rlp.val_at::<u64>(1)?),
+        let data = Self {
+            nonce: U256::from_be_slice(&rlp.val_at::<Vec<u8>>(0)?),
+            balance: U256::from_be_slice(&rlp.val_at::<Vec<u8>>(1)?),
             storage_root: B256::from_slice(&rlp.val_at::<Vec<u8>>(2)?),
             code_hash: B256::from_slice(&rlp.val_at::<Vec<u8>>(3)?),
-        })
+        };
+        Ok(data)
     }
 
     fn to_raw_rlp(&self) -> Result<Bytes, Error> {
         let mut rlp_stream = RlpStream::default();
         rlp_stream.begin_list(4);
-        // MEGA-CURSED CODE AHEAD
-        rlp_stream.append(&self.nonce.to_be_bytes_vec().as_slice());
-        rlp_stream.append(&self.balance.to_be_bytes_vec().as_slice());
+        rlp_stream.append(&self.nonce.to_be_bytes_trimmed_vec().as_slice());
+        rlp_stream.append(&self.balance.to_be_bytes_trimmed_vec().as_slice());
         rlp_stream.append(&self.storage_root.0.as_slice());
         rlp_stream.append(&self.code_hash.0.as_slice());
         Ok(Bytes::from(rlp_stream.out().to_vec()))

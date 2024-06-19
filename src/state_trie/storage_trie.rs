@@ -20,14 +20,7 @@ impl MptKey for U256 {
 impl LeafValue for U256 {
     fn from_raw_rlp(raw: Bytes) -> Result<Self, crate::Error> {
         let rlp = Rlp::new(&raw);
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(
-            rlp.data()?
-                .to_owned()
-                .get(0..32)
-                .ok_or(Error::InternalError("Invalid RLP data"))?,
-        );
-        Ok(U256::from_be_bytes(bytes.to_owned()))
+        Ok(U256::from_be_slice(rlp.data()?))
     }
 
     fn to_raw_rlp(&self) -> Result<Bytes, crate::Error> {
