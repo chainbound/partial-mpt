@@ -1,8 +1,9 @@
+use alloy_eips::{BlockId, BlockNumberOrTag};
+use alloy_primitives::{Address, B256, U256};
+use alloy_provider::{Provider, ProviderBuilder};
+use alloy_rpc_types::BlockTransactionsKind;
+use alloy_transport_http::reqwest::Url;
 use dotenvy::dotenv;
-use ethers::{
-    providers::{Middleware, Provider},
-    types::{Address, BlockId, BlockNumber, H256, U256},
-};
 use partial_mpt::StateTrie;
 
 #[tokio::main]
@@ -13,18 +14,24 @@ async fn main() {
     dotenv().ok();
     let api_key = std::env::var("ALCHEMY_API_KEY").unwrap();
     let rpc_url = format!("https://eth-mainnet.g.alchemy.com/v2/{}", api_key);
-    let provider = Provider::try_from(rpc_url).unwrap();
-    let latest = BlockId::Number(BlockNumber::Latest);
-    let latest_block = provider.get_block(latest).await.unwrap().unwrap();
+    let provider = ProviderBuilder::new().on_http(Url::parse(rpc_url.as_str()).unwrap());
+
+    let latest = BlockId::Number(BlockNumberOrTag::Latest);
+    let latest_block = provider
+        .get_block(latest, BlockTransactionsKind::Full)
+        .await
+        .unwrap()
+        .unwrap();
 
     // lets create a partial state trie starting from the latest block's state root
-    let mut state_trie = StateTrie::from_root(latest_block.state_root);
+    let mut state_trie = StateTrie::from_root(latest_block.header.state_root);
 
     // download EIP-1186 state proof for 0x0000000000000000000000000000000000000000.
     state_trie
         .load_proof(
             provider
-                .get_proof(Address::zero(), vec![H256::zero()], Some(latest))
+                .get_proof(Address::ZERO, vec![B256::ZERO])
+                .block_id(latest)
                 .await
                 .unwrap(),
         )
@@ -35,7 +42,7 @@ async fn main() {
     // yay eth burn!
     state_trie
         .account_trie
-        .set_balance(Address::zero(), U256::from(0))
+        .set_balance(Address::ZERO, U256::ZERO)
         .unwrap();
 
     println!("state root after burn: {:?}", state_trie.root());

@@ -1,5 +1,5 @@
 use crate::Error;
-use ethers::types::Bytes;
+use alloy_primitives::Bytes;
 use std::fmt;
 
 #[derive(Clone, Default, PartialEq)]
@@ -186,7 +186,7 @@ impl fmt::Debug for Nibbles {
 #[cfg(test)]
 mod tests {
     use super::{Bytes, Nibbles};
-    use ethers::core::utils::hex;
+    use alloy_primitives::hex;
 
     #[test]
     pub fn test_raw_path_1() {

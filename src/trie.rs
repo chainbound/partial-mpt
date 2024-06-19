@@ -4,13 +4,15 @@ use crate::{
     utils::ConsecutiveList,
     Error,
 };
-use ethers::{
-    types::{Bytes, H256},
-    utils::keccak256,
-};
-use std::{fmt::Debug, marker::PhantomData, str::FromStr};
 
-const EMPTY_ROOT_STR: &str = "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421";
+use alloy_primitives::{keccak256, Bytes, FixedBytes, B256};
+use std::{fmt::Debug, marker::PhantomData};
+
+const EMPTY_ROOT_BYTES: FixedBytes<32> = FixedBytes::<32>([
+    0x56u8, 0xe8, 0x1fu8, 0x17, 0x1bu8, 0xcc, 0x55u8, 0xa6, 0xffu8, 0x83, 0x45u8, 0xe6, 0x92u8,
+    0xc0, 0xf8u8, 0x6e, 0x5bu8, 0x48, 0xe0u8, 0x1b, 0x99u8, 0x6c, 0xadu8, 0xc0, 0x01u8, 0x62,
+    0x2fu8, 0xb5, 0xe3u8, 0x63, 0xb4u8, 0x21u8,
+]);
 
 pub trait MptKey: Clone + Debug + PartialEq {
     fn to_nibbles(&self) -> Result<Nibbles, Error>;
@@ -18,13 +20,13 @@ pub trait MptKey: Clone + Debug + PartialEq {
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Trie<K: MptKey, V: LeafValue> {
-    root: Option<H256>,
+    root: Option<B256>,
     nodes: Nodes<V>,
     _marker: PhantomData<K>,
 }
 
 impl<K: MptKey, V: LeafValue> Trie<K, V> {
-    pub fn from_root(root: H256) -> Self {
+    pub fn from_root(root: B256) -> Self {
         Trie {
             root: Some(root),
             nodes: Nodes::default(),
@@ -33,10 +35,10 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
     }
 
     pub fn empty() -> Self {
-        Self::from_root(H256::from_str(EMPTY_ROOT_STR).unwrap())
+        Self::from_root(B256::from(EMPTY_ROOT_BYTES))
     }
 
-    pub fn root(&self) -> Option<H256> {
+    pub fn root(&self) -> Option<B256> {
         self.root
     }
 
@@ -49,15 +51,14 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
         let mut hash_current = self.root.unwrap();
         let mut i = 0;
         loop {
-            if hash_current == EMPTY_ROOT_STR.parse().unwrap() {
+            if hash_current == EMPTY_ROOT_BYTES {
                 // we got to an empty hash, means everything under this is empty.
                 return Ok(V::default());
             }
 
-            let node_data = self
-                .nodes
-                .get(&hash_current)
-                .ok_or(Error::InternalError("node not present, please add a proof"))?;
+            let node_data = self.nodes.get(&hash_current).ok_or(Error::InternalError(
+                "trie.get: node not present, please add a proof",
+            ))?;
 
             match node_data {
                 NodeData::Leaf { key, value } => {
@@ -86,7 +87,7 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
                     // consume extension key nibbles from path.
                     i += key.len();
                     // get hash of next branch node from the extension to walk further.
-                    hash_current = node.to_owned();
+                    node.clone_into(&mut hash_current);
                 }
             }
         }
@@ -105,7 +106,7 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
         let path = key.to_nibbles()?;
         let mut hash_items = ConsecutiveList::new(self.root.unwrap());
 
-        if hash_items.current() == EMPTY_ROOT_STR.parse().unwrap() {
+        if hash_items.current() == EMPTY_ROOT_BYTES {
             // root is empty, simply assign a leaf to the root.
             self.root = Some(self.nodes.create_leaf(path, new_value)?);
             return Ok(());
@@ -113,13 +114,15 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
 
         // keep traversing down the trie until we get the final node and update it.
         let mut i = 0;
-        let mut hash_updated: H256;
+        let mut hash_updated: B256;
         loop {
             // temporarily remove node from the map, so we can insert updated node into the map.
-            let current_node = self
-                .nodes
-                .remove(&hash_items.current())
-                .ok_or(Error::InternalError("node not present, please add a proof"))?;
+            let current_node =
+                self.nodes
+                    .remove(&hash_items.current())
+                    .ok_or(Error::InternalError(
+                        "trie.set: node not present, please add a proof",
+                    ))?;
 
             // update current node if necessary.
             let current_node_updated = match current_node {
@@ -278,7 +281,7 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
                 }
             } else {
                 // leaf is directly on the root, removing it makes the trie empty.
-                hash_updated = EMPTY_ROOT_STR.parse().unwrap();
+                hash_updated = EMPTY_ROOT_BYTES;
             }
         }
 
@@ -334,7 +337,7 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
     pub fn load_proof(&mut self, key: K, value: V, proof: Vec<Bytes>) -> Result<(), Error> {
         if proof.is_empty() {
             if self.root.is_some() {
-                if self.root.unwrap() != EMPTY_ROOT_STR.parse().unwrap() {
+                if self.root.unwrap() != EMPTY_ROOT_BYTES {
                     // enforce proof to be empty.
                     return Err(Error::InternalError(
                         "Root is not empty, hence some proof is needed",
@@ -353,14 +356,14 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
         if self.root.is_none() {
             // use first element in proof to calculate root.
             let proof_root = proof[0].clone();
-            self.root = Some(H256::from(keccak256(proof_root)));
+            self.root = Some(B256::from(keccak256(proof_root)));
         }
 
         let mut root = self.root.unwrap();
         let mut key_current = key.clone().to_nibbles()?;
 
         for (i, proof_entry) in proof.iter().enumerate() {
-            let hash_node_data = H256::from(keccak256(proof_entry.clone()));
+            let hash_node_data = B256::from(keccak256(proof_entry.clone()));
 
             // check if node data is preimage of root.
             if hash_node_data != root {
@@ -414,7 +417,7 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
                         }
                     } else {
                         // find the child node in branch which matches hash_child.
-                        let hash_child = H256::from(keccak256(proof[i + 1].clone()));
+                        let hash_child = B256::from(keccak256(proof[i + 1].clone()));
                         for some_child in arr {
                             if let Some(child) = some_child {
                                 if child == hash_child {
@@ -437,11 +440,12 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MptKey, Nibbles, NodeData, Trie, EMPTY_ROOT_STR};
-    use ethers::{
-        types::{BigEndianHash, Bytes, H256, U256},
-        utils::{hex, keccak256},
-    };
+    const EMPTY_ROOT_STR: &str = "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421";
+
+    use super::EMPTY_ROOT_BYTES;
+
+    use super::{MptKey, Nibbles, NodeData, Trie};
+    use alloy_primitives::{hex, keccak256, Bytes, B256, U256};
 
     impl MptKey for Nibbles {
         fn to_nibbles(&self) -> Result<Nibbles, crate::Error> {
@@ -452,9 +456,19 @@ mod tests {
     impl MptKey for u64 {
         fn to_nibbles(&self) -> Result<Nibbles, crate::Error> {
             Ok(Nibbles::from_raw_path(Bytes::from(
-                keccak256(H256::from_uint(&U256::from(*self))).to_vec(),
+                keccak256(B256::from(U256::from(*self))).to_vec(),
             )))
         }
+    }
+
+    #[test]
+    fn test_empty_root() {
+        use std::str::FromStr;
+        assert_eq!(
+            EMPTY_ROOT_BYTES,
+            B256::from_str("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
+                .unwrap()
+        );
     }
 
     #[test]

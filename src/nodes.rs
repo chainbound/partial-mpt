@@ -3,14 +3,9 @@ use std::{
     fmt::{self, Debug},
 };
 
-use bytes::BytesMut;
-use ethers::{
-    types::{Bytes, H256},
-    utils::{
-        hex, keccak256,
-        rlp::{self, Rlp, RlpStream},
-    },
-};
+use alloy_primitives::{hex, keccak256, Bytes, B256};
+use alloy_rlp::BytesMut;
+use rlp::{Rlp, RlpStream};
 
 use crate::{nibbles::Nibbles, Error};
 
@@ -22,29 +17,29 @@ pub trait LeafValue: Clone + Debug + Default + PartialEq {
 }
 
 #[derive(Clone, Default, Debug, PartialEq)]
-pub struct Nodes<V: LeafValue>(HashMap<H256, NodeData<V>>);
+pub struct Nodes<V: LeafValue>(HashMap<B256, NodeData<V>>);
 
 impl<V: LeafValue> Nodes<V> {
-    pub fn get(&self, hash: &H256) -> Option<&NodeData<V>> {
+    pub fn get(&self, hash: &B256) -> Option<&NodeData<V>> {
         self.0.get(hash)
     }
 
     #[allow(dead_code)]
     pub fn get_str(&self, hash_str: &str) -> Option<&NodeData<V>> {
-        let hash = hash_str.parse::<H256>().unwrap();
+        let hash = hash_str.parse::<B256>().unwrap();
         self.get(&hash)
     }
 
-    pub fn insert(&mut self, node_data: NodeData<V>) -> Result<(H256, Option<NodeData<V>>), Error> {
+    pub fn insert(&mut self, node_data: NodeData<V>) -> Result<(B256, Option<NodeData<V>>), Error> {
         let key = node_data.hash()?;
         Ok((key, self.0.insert(key, node_data)))
     }
 
-    pub fn remove(&mut self, hash: &H256) -> Option<NodeData<V>> {
+    pub fn remove(&mut self, hash: &B256) -> Option<NodeData<V>> {
         self.0.remove(hash)
     }
 
-    pub fn create_leaf(&mut self, key: Nibbles, value: V) -> Result<H256, Error> {
+    pub fn create_leaf(&mut self, key: Nibbles, value: V) -> Result<B256, Error> {
         let (hash_leaf, _) = self.insert(NodeData::Leaf { key, value })?;
         Ok(hash_leaf)
     }
@@ -56,7 +51,7 @@ impl<V: LeafValue> Nodes<V> {
         key_b: Nibbles,
         value_b: V,
     ) -> Result<NodeData<V>, Error> {
-        let mut branch_node_arr: [Option<H256>; 17] = [None; 17];
+        let mut branch_node_arr: [Option<B256>; 17] = [None; 17];
 
         let intersection = key_a.intersect(&key_b)?;
 
@@ -101,16 +96,16 @@ impl<V: LeafValue> Nodes<V> {
 #[derive(Clone, PartialEq)]
 pub enum NodeData<V: LeafValue> {
     Leaf { key: Nibbles, value: V },
-    Branch([Option<H256>; 17]),
-    Extension { key: Nibbles, node: H256 },
+    Branch([Option<B256>; 17]),
+    Extension { key: Nibbles, node: B256 },
 }
 
 impl<V> NodeData<V>
 where
     V: LeafValue,
 {
-    pub fn hash(&self) -> Result<H256, Error> {
-        Ok(H256::from(keccak256(self.to_raw_rlp()?)))
+    pub fn hash(&self) -> Result<B256, Error> {
+        Ok(B256::from(keccak256(self.to_raw_rlp()?)))
     }
 
     #[allow(dead_code)]
@@ -128,7 +123,7 @@ where
         matches!(self, NodeData::Extension { .. })
     }
 
-    pub fn get_branch_arr(&self) -> Option<[Option<H256>; 17]> {
+    pub fn get_branch_arr(&self) -> Option<[Option<B256>; 17]> {
         match self {
             NodeData::Branch(arr) => Some(arr.to_owned()),
             _ => None,
@@ -170,16 +165,17 @@ where
                     }
                     NodeData::Extension {
                         key,
-                        node: H256::from_slice(hash.as_slice()),
+                        node: B256::from_slice(hash.as_slice()),
                     }
                 }
             }),
             17 => Ok({
-                let mut arr: [Option<H256>; 17] = Default::default();
+                let mut arr: [Option<B256>; 17] = Default::default();
+
                 for i in 0..17 {
                     let value = rlp.at(i)?.data()?.to_owned();
                     arr[i] = match value.len() {
-                        32 => Ok(Some(H256::from_slice(value.as_slice()))),
+                        32 => Ok(Some(B256::from_slice(value.as_slice()))),
                         0 => Ok(None),
                         _ => Err(Error::InternalError("invalid hash length in Extension")),
                     }?
@@ -191,7 +187,7 @@ where
     }
 
     pub fn to_raw_rlp(&self) -> Result<Bytes, Error> {
-        let mut rlp_stream = rlp::RlpStream::new();
+        let mut rlp_stream = RlpStream::new();
         match self {
             NodeData::Leaf { key, value } => {
                 let key_bm = BytesMut::from(key.encode_path(true).to_vec().as_slice());
@@ -205,7 +201,7 @@ where
                 rlp_stream.begin_list(17);
                 for entry in arr.iter() {
                     let bm = if entry.is_some() {
-                        BytesMut::from(entry.to_owned().unwrap().as_bytes())
+                        BytesMut::from(entry.to_owned().unwrap().as_slice())
                     } else {
                         BytesMut::new()
                     };
@@ -214,7 +210,7 @@ where
             }
             NodeData::Extension { key, node } => {
                 let key_bm = BytesMut::from(key.encode_path(false).to_vec().as_slice());
-                let value_bm = BytesMut::from(node.as_bytes());
+                let value_bm = BytesMut::from(node.as_slice());
                 rlp_stream.begin_list(2);
                 rlp_stream.append(&key_bm);
                 rlp_stream.append(&value_bm);
@@ -237,7 +233,7 @@ where
                 hex::encode(value.to_owned().to_raw_rlp().unwrap())
             ),
             NodeData::Branch(branch) => format!(
-                "Branch({:?}",
+                "Branch({:?})",
                 branch
                     .iter()
                     .map(|node| {
@@ -259,7 +255,7 @@ where
 }
 
 impl LeafValue for u64 {
-    fn from_raw_rlp(raw: ethers::types::Bytes) -> Result<u64, crate::Error> {
+    fn from_raw_rlp(raw: Bytes) -> Result<u64, crate::Error> {
         let rlp = Rlp::new(&raw);
         let arr = rlp.data()?.to_owned();
         if arr.len() <= 8 {
@@ -274,7 +270,7 @@ impl LeafValue for u64 {
         }
     }
 
-    fn to_raw_rlp(&self) -> Result<ethers::types::Bytes, crate::Error> {
+    fn to_raw_rlp(&self) -> Result<Bytes, crate::Error> {
         let mut vec = Vec::<u8>::new();
         let mut flag = false;
         for i in (0..8).rev() {
@@ -295,7 +291,7 @@ impl LeafValue for u64 {
 #[cfg(test)]
 mod tests {
     use super::{Nibbles, NodeData};
-    use ethers::utils::hex;
+    use alloy_primitives::hex;
 
     #[test]
     pub fn test_node_data_new_leaf_node_1() {
@@ -305,8 +301,6 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-
-        println!("node_data {:#?}", node_data);
 
         assert_eq!(
             node_data,
@@ -350,8 +344,6 @@ mod tests {
         )
         .unwrap();
 
-        println!("node_data {:#?}", node_data);
-
         assert_eq!(
             node_data,
             NodeData::Extension {
@@ -379,8 +371,6 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-
-        println!("node_data {:#?}", node_data);
 
         assert_eq!(
             node_data,
