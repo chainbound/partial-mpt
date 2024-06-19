@@ -6,4 +6,4 @@ mod trie;
 mod utils;
 
 pub use error::Error;
-pub use state_trie::StateTrie;
+pub use state_trie::{AccountData, StateTrie};
