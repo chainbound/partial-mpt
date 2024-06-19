@@ -10,28 +10,12 @@ tokio = { version = "1.13", features = ["full"] }
 dotenvy = "0.15.7"
 
 # Alloy
-alloy-rpc-client = { git = "https://github.com/alloy-rs/alloy", features = [
-    "reqwest",
-    "ws",
-    "pubsub",
-], version = "0.1.1" }
 alloy-provider = { git = "https://github.com/alloy-rs/alloy", features = [
-    "ws",
+  "ws",
 ], version = "0.1.1" }
-alloy-signer = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-signer-local = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-transport = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
 alloy-eips = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
 alloy-transport-http = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-transport-ws = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-pubsub = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
 alloy-rpc-types = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-rpc-types-trace = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-consensus = { git = "https://github.com/alloy-rs/alloy", features = [
-    "k256",
-], version = "0.1.1" }
-alloy-json-rpc = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-network = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
 alloy-primitives = "0.7.1"
 alloy-rlp = "0.3"
 rlp = "0.5.2"
