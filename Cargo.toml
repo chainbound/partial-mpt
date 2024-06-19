@@ -10,14 +10,13 @@ tokio = { version = "1.13", features = ["full"] }
 dotenvy = "0.15.7"
 
 # Alloy
-alloy-provider = { git = "https://github.com/alloy-rs/alloy", features = [
-  "ws",
-], version = "0.1.1" }
-alloy-eips = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-transport-http = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
-alloy-rpc-types = { git = "https://github.com/alloy-rs/alloy", version = "0.1.1" }
+alloy-provider = "0.1.1"
+alloy-eips = "0.1.1"
+alloy-transport-http = "0.1.1"
+alloy-rpc-types = "0.1.1"
 alloy-primitives = "0.7.1"
 alloy-rlp = "0.3"
+
 rlp = "0.5.2"
 
 

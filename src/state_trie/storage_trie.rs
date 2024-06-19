@@ -12,7 +12,7 @@ pub type StorageTrie = Trie<U256, U256>;
 
 impl MptKey for U256 {
     fn to_nibbles(&self) -> Result<Nibbles, Error> {
-        let hashed = keccak256(B256::from(*self)).clone();
+        let hashed = keccak256(B256::from(*self));
         Ok(Nibbles::from_raw_path(hashed.into()))
     }
 }

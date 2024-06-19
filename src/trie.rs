@@ -87,7 +87,7 @@ impl<K: MptKey, V: LeafValue> Trie<K, V> {
                     // consume extension key nibbles from path.
                     i += key.len();
                     // get hash of next branch node from the extension to walk further.
-                    hash_current = node.to_owned();
+                    node.clone_into(&mut hash_current);
                 }
             }
         }
